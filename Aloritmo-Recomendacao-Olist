@@ -1,1 +1,76 @@
+import dash
+from dash import dcc, html
+from dash.dependencies import Input, Output, State
+import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import linear_kernel
+from nltk.corpus import stopwords
+import nltk
 
+
+
+app = dash.Dash(__name__)
+
+# Carregar o DataFrame
+data = pd.read_csv('olist_consolidado.csv')
+
+selected_columns = ['customer_id', 'product_id', 'product_category_name', 'review_score']
+data = data[selected_columns]
+
+data = data.dropna()
+
+data.head()
+
+# Baixar a lista de stopwords em português (se ainda não estiver baixada)
+nltk.download('stopwords')
+
+# Obter a lista de stopwords em português
+stop_words = set(stopwords.words('portuguese'))
+
+app.layout = html.Div([
+    html.H1('Sistema de Recomendação de Produtos'),
+    dcc.Input(id='customer_id', type='text', placeholder='Insira o ID do Cliente'),
+    html.Button('Recomendar', id='recomendar-button'),
+    html.H2('Produtos Recomendados:'),
+    html.Ul(id='recommended-products-list')
+])
+
+@app.callback(
+    Output('recommended-products-list', 'children'),
+    [Input('recomendar-button', 'n_clicks')],
+    [State('customer_id', 'value')]
+)
+def update_recommended_products(n_clicks, customer_id):
+    if n_clicks and customer_id:
+        # Filtra as interações desse cliente
+        customer_interactions = data[data['customer_id'] == customer_id]
+
+        # Criação do modelo TF-IDF para categorias de produtos
+        tfidf_vectorizer = TfidfVectorizer(stop_words=stop_words, max_features=73)
+        tfidf_matrix_products = tfidf_vectorizer.fit_transform(data['product_category_name'])
+
+        # Criação do modelo TF-IDF para o cliente específico
+        tfidf_matrix_customer = tfidf_vectorizer.transform(customer_interactions['product_category_name'])
+
+        # Cálculo da similaridade de cosseno entre o cliente e os produtos
+        cosine_sim = linear_kernel(tfidf_matrix_customer, tfidf_matrix_products)
+
+        # Índices dos produtos mais similares (recomendados) para o cliente
+        recommended_products_indices = cosine_sim.argsort()[0][::-1]
+
+        # Exclui os produtos com os quais o cliente já interagiu
+        interacted_products = set(customer_interactions['product_id'])
+        recommended_products_indices = [idx for idx in recommended_products_indices if data.iloc[idx]['product_id'] not in interacted_products]
+
+        # Ordena os produtos recomendados com base nas pontuações de avaliação (review_score)
+        recommended_products_indices.sort(key=lambda idx: data.iloc[idx]['review_score'], reverse=True)
+
+        # Pega os top 10 produtos recomendados
+        top_recommended_products = data.iloc[recommended_products_indices[:10]]['product_id']
+        
+        return [html.Li(product_id) for product_id in top_recommended_products]
+
+    return []
+
+if __name__ == '__main__':
+    app.run_server(debug=True)
